@@ -18,13 +18,17 @@ if FRONTEND_URL not in ALLOWED_ORIGINS:
 
 app = Flask(__name__)
 
+# ------------------------------
+# CORS setup
+# ------------------------------
 CORS(
     app,
     origins=ALLOWED_ORIGINS,
     supports_credentials=True,
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-    expose_headers=["Content-Type", "Authorization"],
+    expose_headers=["Content-Type", "Authorization"]
+)
 
 # ------------------------------
 # Global OPTIONS request handler and performance timing
@@ -51,7 +55,7 @@ def handle_preflight_requests():
 
         print(f"🔧 OPTIONS request from origin: {origin}")
         return response, 200
-)
+        )
 # MongoDB connection with SSL fix
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://star_tailor:fljC9lR6aUPZffka@cluster0.sfkrwck.mongodb.net')
 
