@@ -25,7 +25,6 @@ CORS(
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
     expose_headers=["Content-Type", "Authorization"],
-)
 
 # ------------------------------
 # Global OPTIONS request handler and performance timing
