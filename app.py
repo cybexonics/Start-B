@@ -30,7 +30,6 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://star-tailor.vercel.app')
 
 # Allow both development and production URLs for CORS
-fastapi.middleware
 # Add custom frontend URL if different from defaults
 if FRONTEND_URL not in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
