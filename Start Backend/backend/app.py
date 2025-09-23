@@ -26,12 +26,9 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://star-tailor.vercel.app')
 
 # Allow both development and production URLs for CORS
 ALLOWED_ORIGINS = [
-    'http://localhost:3000',          # Local development
-    'http://127.0.0.1:3000',          # Alternative localhost
-    'https://star-tailor-website.vercel.app',
-    'https://star-tailor.vercel.app'  # Production
+    'https://star-frontend-chi.vercel.app',  # your live frontend
+    'http://localhost:3000'                   # optional, for local testing
 ]
-
 # Add custom frontend URL if different from defaults
 if FRONTEND_URL not in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
