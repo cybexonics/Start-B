@@ -30,7 +30,7 @@ ALLOWED_ORIGINS = [
     'http://localhost:3000'                   # optional, for local testing
 ]
 # Add custom frontend URL if different from defaults
-if FRONTEND_URL not in ALLOWED_ORIGINS:
+if FRONTEND_URL not in :
     ALLOWED_ORIGINS.append(FRONTEND_URL)
 
 print(f"🔧 FRONTEND_URL from env: {FRONTEND_URL}")
@@ -38,7 +38,7 @@ print(f"🔧 ALLOWED_ORIGINS: {ALLOWED_ORIGINS}")
 
 # Configure CORS with explicit settings
 CORS(app, 
-     origins='https://star-tailor.vercel.app',
+     origins='https://https://star-frontend-chi.vercel.app',
      supports_credentials=True,
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
      allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
