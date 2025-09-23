@@ -31,12 +31,22 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://star-tailor.vercel.app')
 
 # Allow both development and production URLs for CORS
 ALLOWED_ORIGINS = [
-    'http://localhost:3000',          # Local development
-    'http://127.0.0.1:3000',          # Alternative localhost
-    'https://star-tailor-website.vercel.app',
-    'https://star-tailor.vercel.app'  # Production
+    "https://star-frontend-chi.vercel.app",  # Production frontend
 ]
 
+# FastAPI example
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # Add custom frontend URL if different from defaults
 if FRONTEND_URL not in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
