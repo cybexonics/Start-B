@@ -1,5 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from pymongo import MongoClient   # ✅ Fix for MongoDB
+from functools import wraps       # ✅ Fix for token decorator
 import os
 import time
 
