@@ -62,7 +62,8 @@ def handle_preflight_requests():
 # ------------------------------
 # MongoDB connection
 # ------------------------------
-MONGO_URI = os.getenv("MONGO_URI")  # 👈 Make sure this is set in Render dashboard
+MONGO_URI = os.getenv("MONGO_URI")  # 👈 Set in Render dashboard
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "star_tailors")  # fallback
 
 try:
     client = MongoClient(
@@ -71,19 +72,15 @@ try:
         tlsAllowInvalidCertificates=True,  # ✅ Fix Render SSL issue
         serverSelectionTimeoutMS=5000
     )
-    db = client.get_database()
+
+    # Pick DB name either from URI or env
+    db = client[MONGO_DB_NAME]
+
+    # Test connection
+    client.admin.command("ping")
     print("✅ MongoDB connected successfully")
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-    client = None
-    db = None
-    
-    # Test the connection
-    client.admin.command('ping')
-    print("✅ MongoDB connection successful!")
-    
-    # Only set up collections if connection is successful
-    db = client.star_tailors
+
+    # Collections
     users_collection = db.users
     customers_collection = db.customers
     bills_collection = db.bills
@@ -91,6 +88,11 @@ except Exception as e:
     settings_collection = db.settings
     jobs_collection = db.jobs
     counters_collection = db.counters
+
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+    client = None
+    db = None
     
     # Create indexes for better performance
     def create_indexes():
