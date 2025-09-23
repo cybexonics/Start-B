@@ -4,6 +4,7 @@ from pymongo import MongoClient   # ✅ Fix for MongoDB
 from functools import wraps       # ✅ Fix for token decorator
 import os
 import time
+import threading   # ✅ Fix for threading issue
 
 # ------------------------------
 # CORS configuration
@@ -58,32 +59,24 @@ def handle_preflight_requests():
         print(f"🔧 OPTIONS request from origin: {origin}")
         return response, 200
         
-# MongoDB connection with SSL fix
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://star_tailor:fljC9lR6aUPZffka@cluster0.sfkrwck.mongodb.net')
+# ------------------------------
+# MongoDB connection
+# ------------------------------
+MONGO_URI = os.getenv("MONGO_URI")  # 👈 Make sure this is set in Render dashboard
 
-# Initialize collections as None initially
-users_collection = None
-customers_collection = None
-bills_collection = None
-tailors_collection = None
-settings_collection = None
-jobs_collection = None
-counters_collection = None
-
-# Connect to MongoDB with SSL options
 try:
     client = MongoClient(
         MONGO_URI,
         tls=True,
-        tlsAllowInvalidCertificates=True,
-        retryWrites=True,
-        w='majority',
-        connectTimeoutMS=5000,  # 5 second connection timeout
-        socketTimeoutMS=10000,  # 10 second socket timeout
-        serverSelectionTimeoutMS=5000,  # 5 second server selection timeout
-        maxPoolSize=50,  # Increased connection pool size
-        minPoolSize=10
+        tlsAllowInvalidCertificates=True,  # ✅ Fix Render SSL issue
+        serverSelectionTimeoutMS=5000
     )
+    db = client.get_database()
+    print("✅ MongoDB connected successfully")
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+    client = None
+    db = None
     
     # Test the connection
     client.admin.command('ping')
