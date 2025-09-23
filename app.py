@@ -1,77 +1,58 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pymongo import MongoClient, ReturnDocument
-from bson import ObjectId
-from datetime import datetime, timedelta
-import jwt
-import bcrypt
-from functools import wraps
 import os
-from dotenv import load_dotenv
-import ssl
 import time
-from cachetools import TTLCache
-import threading
-from concurrent.futures import ThreadPoolExecutor
 
-# Load environment variables
-load_dotenv()
+# ------------------------------
+# CORS configuration
+# ------------------------------
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://star-frontend-chi.vercel.app"
+]
 
-# Initialize Flask app
-app = Flask(__name__)
-# ---- add this (Flask) ----
-@app.route("/")
-def home():
-    return {"status": "ok", "message": "Backend is running ✅"}
-# --------------------------
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://star-frontend-chi.vercel.app")
 
-# Read frontend URL for CORS from env (default to localhost)
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://star-tailor.vercel.app')
-
-# Allow both development and production URLs for CORS
-# Add custom frontend URL if different from defaults
 if FRONTEND_URL not in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS.append(FRONTEND_URL)
 
-print(f"🔧 FRONTEND_URL from env: {FRONTEND_URL}")
-print(f"🔧 ALLOWED_ORIGINS: {ALLOWED_ORIGINS}")
+app = Flask(__name__)
 
-# Configure CORS with explicit settings
-CORS(app, 
-     origins='https://star-tailor.vercel.app',
-     supports_credentials=True,
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-     allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-     expose_headers=['Content-Type', 'Authorization'])
+CORS(
+    app,
+    origins=ALLOWED_ORIGINS,
+    supports_credentials=True,
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    expose_headers=["Content-Type", "Authorization"],
+)
 
-# Simple caching for frequently accessed data
-cache = TTLCache(maxsize=100, ttl=300)  # 5 minute TTL
-
-# Global OPTIONS request handler and performance timing - MUST come before any route processing
+# ------------------------------
+# Global OPTIONS request handler and performance timing
+# ------------------------------
 @app.before_request
 def handle_preflight_requests():
     # Set timing for performance monitoring
     request.start_time = time.time()
-    
+
     # Handle CORS preflight requests
-    if request.method == 'OPTIONS':
-        origin = request.headers.get('Origin')
-        response = jsonify({'message': 'CORS preflight'})
-        
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin")
+        response = jsonify({"message": "CORS preflight"})
+
         if origin in ALLOWED_ORIGINS:
-            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers["Access-Control-Allow-Origin"] = origin
         else:
-            response.headers['Access-Control-Allow-Origin'] = ALLOWED_ORIGINS[0]
-            
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        
+            response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGINS[0]
+
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Max-Age"] = "3600"
+
         print(f"🔧 OPTIONS request from origin: {origin}")
         return response, 200
-
+)
 # MongoDB connection with SSL fix
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://star_tailor:fljC9lR6aUPZffka@cluster0.sfkrwck.mongodb.net')
 
