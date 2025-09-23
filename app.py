@@ -55,7 +55,7 @@ def handle_preflight_requests():
 
         print(f"🔧 OPTIONS request from origin: {origin}")
         return response, 200
-        )
+        
 # MongoDB connection with SSL fix
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://star_tailor:fljC9lR6aUPZffka@cluster0.sfkrwck.mongodb.net')
 
