@@ -17,60 +17,62 @@ from concurrent.futures import ThreadPoolExecutor
 # Load environment variables
 load_dotenv()
 
-# Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
 
-# Read frontend URL for CORS from env (default to localhost)
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://star-tailor.vercel.app')
-
-# Allow both development and production URLs for CORS
+# ------------------------------
+# CORS configuration
+# ------------------------------
 ALLOWED_ORIGINS = [
-    'https://star-frontend-chi.vercel.app',  # your live frontend
-    'http://localhost:3000'                   # optional, for local testing
+    "http://localhost:3000",
+    "https://star-frontend-chi.vercel.app"
 ]
-# Add custom frontend URL if different from defaults
-if FRONTEND_URL not in :
-    ALLOWED_ORIGINS.append(FRONTEND_URL)
 
-print(f"🔧 FRONTEND_URL from env: {FRONTEND_URL}")
-print(f"🔧 ALLOWED_ORIGINS: {ALLOWED_ORIGINS}")
-
-# Configure CORS with explicit settings
-CORS(app, 
-     origins='https://https://star-frontend-chi.vercel.app',
+CORS(app,
+     origins=ALLOWED_ORIGINS,
      supports_credentials=True,
      methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
      allow_headers=['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-     expose_headers=['Content-Type', 'Authorization'])
+     expose_headers=['Content-Type', 'Authorization']
+)
 
-# Simple caching for frequently accessed data
-cache = TTLCache(maxsize=100, ttl=300)  # 5 minute TTL
-
-# Global OPTIONS request handler and performance timing - MUST come before any route processing
-@app.before_request
-def handle_preflight_requests():
-    # Set timing for performance monitoring
-    request.start_time = time.time()
-    
-    # Handle CORS preflight requests
-    if request.method == 'OPTIONS':
-        origin = request.headers.get('Origin')
-        response = jsonify({'message': 'CORS preflight'})
-        
-        if origin in ALLOWED_ORIGINS:
-            response.headers['Access-Control-Allow-Origin'] = origin
-        else:
-            response.headers['Access-Control-Allow-Origin'] = ALLOWED_ORIGINS[0]
-            
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
+@app.after_request
+def add_headers(response):
+    origin = request.headers.get('Origin')
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        
-        print(f"🔧 OPTIONS request from origin: {origin}")
-        return response, 200
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
 
+    # Optional performance header
+    if hasattr(request, 'start_time'):
+        response.headers['X-Response-Time'] = f"{time.time() - request.start_time:.3f}s"
+    return response
+
+# ------------------------------
+# Example route
+# ------------------------------
+@app.route('/')
+def index():
+    return jsonify({"message": "Backend is running ✅", "status": "ok"})
+
+# ------------------------------
+# Add your routes below this line
+# ------------------------------
+# e.g., @app.route('/customers', methods=['GET'])
+# def get_customers():
+#     return jsonify({"customers": []})
+
+# ------------------------------
+# Run the Flask app
+# ------------------------------
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 5000))
+    debug_mode = os.getenv('DEBUG', 'True').lower() == 'true'
+    print(f"🚀 Starting Flask server on port {port}, debug={debug_mode}")
+    print(f"🔧 CORS configured for origins: {ALLOWED_ORIGINS}")
+    app.run(debug=debug_mode, host='0.0.0.0', port=port, threaded=True)
+    
 # MongoDB connection with SSL fix
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb+srv://star_tailor:fljC9lR6aUPZffka@cluster0.sfkrwck.mongodb.net')
 
