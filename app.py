@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-app.py - Flask API for Start-B (drop-in ready)
+app.py - Flask API for Start-B (drop-in ready) with atomic sequential bill numbers
 """
 
 from flask import Flask, request, jsonify, make_response
@@ -97,7 +97,7 @@ if MONGO_URI:
             MONGO_URI,
             serverSelectionTimeoutMS=5000,
             tls=True,
-            tlsAllowInvalidCertificates=True  # fix SSL handshake on Render
+            tlsAllowInvalidCertificates=True
         )
         client.admin.command("ping")
         db = client.get_database(DB_NAME)
@@ -147,6 +147,19 @@ def log_and_500(e):
     return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 # ----------------------------
+# MongoDB atomic sequential bill number
+# ----------------------------
+def get_next_bill_number():
+    counter = db["counters"]
+    result = counter.find_one_and_update(
+        {"_id": "bill_number"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True
+    )
+    return result["seq"]
+
+# ----------------------------
 # Routes - Health / Settings
 # ----------------------------
 @app.route("/", methods=["GET"])
@@ -193,7 +206,6 @@ def create_customer():
                 "bills": []
             }
             _memory["customers"][new_id] = customer
-            logger.info("Created customer (memory) id=%s", new_id)
             return jsonify({"message": "Customer created successfully", "customer": customer}), 201
         else:
             payload = {
@@ -221,7 +233,6 @@ def create_customer():
                 "outstanding_balance": 0,
                 "bills": []
             }
-            logger.info("Created customer id=%s", str(inserted_id))
             return jsonify({"message": "Customer created successfully", "customer": customer}), 201
     except Exception as e:
         return log_and_500(e)
@@ -291,7 +302,7 @@ def delete_customer(customer_id):
         return log_and_500(e)
 
 # ----------------------------
-# Bills (with sequential numbers)
+# Bills
 # ----------------------------
 @app.route("/api/bills", methods=["POST"])
 def create_bill():
@@ -308,7 +319,6 @@ def create_bill():
         now = datetime.utcnow()
 
         if _use_memory:
-            # sequential bill number in memory
             last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
             next_number = last_number + 1
 
@@ -331,19 +341,16 @@ def create_bill():
             cust.setdefault("bills", []).append(bill)
             cust["total_orders"] = (cust.get("total_orders") or 0) + 1
             cust["total_spent"] = (cust.get("total_spent") or 0) + total
-            logger.info("Created bill (memory) id=%s for customer=%s", new_id, customer_id)
             return jsonify({"message": "Bill created", "bill": bill}), 201
         else:
-            # sequential bill number in MongoDB
-            last_bill = bills_collection.find_one(sort=[("bill_number", -1)])
-            next_number = 1 if not last_bill else last_bill.get("bill_number", 0) + 1
-
             try:
                 cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
             except Exception:
                 return jsonify({"error": "Invalid customer ID"}), 400
             if not cust_doc:
                 return jsonify({"error": "Customer not found"}), 404
+
+            next_number = get_next_bill_number()  # atomic sequential number
 
             bill_doc = {
                 "bill_number": next_number,
@@ -358,7 +365,6 @@ def create_bill():
             bill_doc["_id"] = str(res.inserted_id)
             customers_collection.update_one({"_id": ObjectId(customer_id)}, {"$inc": {"total_orders": 1, "total_spent": total}})
             bill_doc["created_at"] = iso(now)
-            logger.info("Created bill id=%s for customer=%s", bill_doc["_id"], customer_id)
             return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
         return log_and_500(e)
