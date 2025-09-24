@@ -33,6 +33,8 @@ def after_request(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS,PATCH"
     return response
 
 
@@ -40,9 +42,15 @@ def after_request(response):
 # MongoDB Setup
 # ----------------------------
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-client = MongoClient(MONGO_URI)
-db = client["start-billing"]
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
 
+try:
+    client.admin.command("ping")
+    print("✅ MongoDB connected successfully")
+except Exception as e:
+    print(f"❌ MongoDB connection failed: {e}")
+
+db = client["start-billing"]
 customers_collection = db["customers"]
 bills_collection = db["bills"]
 
@@ -51,6 +59,7 @@ bills_collection = db["bills"]
 # Utility: JSON Encoder for ObjectId
 # ----------------------------
 def serialize_doc(doc):
+    """Convert MongoDB ObjectId to string for JSON responses."""
     if "_id" in doc:
         doc["_id"] = str(doc["_id"])
     return doc
@@ -60,9 +69,9 @@ def serialize_doc(doc):
 # API ROUTES
 # ----------------------------
 
+# --- Settings ---
 @app.route("/api/settings/business", methods=["GET"])
 def get_business_settings():
-    """Static business settings (you can later fetch from DB)."""
     return jsonify({
         "business_name": "My Shop",
         "address": "123 Street",
@@ -72,45 +81,42 @@ def get_business_settings():
 
 @app.route("/api/settings/upi", methods=["GET"])
 def get_upi_settings():
-    """Static UPI settings (you can later fetch from DB)."""
     return jsonify({
         "upi_id": "myshop@upi",
         "qr_code_url": "https://example.com/qr.png"
     })
 
 
-# -------- Customers --------
-
+# --- Customers ---
 @app.route("/api/customers", methods=["POST"])
 def create_customer():
     data = request.json
     if not data or not data.get("name") or not data.get("phone"):
         return jsonify({"error": "Name and phone are required"}), 400
 
+    now = datetime.utcnow()
     result = customers_collection.insert_one({
         "name": data.get("name"),
         "phone": data.get("phone"),
         "email": data.get("email", ""),
         "address": data.get("address", ""),
         "notes": data.get("notes", ""),
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": now,
+        "updated_at": now
     })
 
-    customer_id = str(result.inserted_id)
-    return jsonify({
-        "message": "Customer created successfully",
-        "customer": {
-            "_id": customer_id,
-            "name": data.get("name"),
-            "phone": data.get("phone"),
-            "email": data.get("email", ""),
-            "address": data.get("address", ""),
-            "notes": data.get("notes", ""),
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-    }), 201
+    customer = {
+        "_id": str(result.inserted_id),
+        "name": data.get("name"),
+        "phone": data.get("phone"),
+        "email": data.get("email", ""),
+        "address": data.get("address", ""),
+        "notes": data.get("notes", ""),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat()
+    }
+
+    return jsonify({"message": "Customer created successfully", "customer": customer}), 201
 
 
 @app.route("/api/customers", methods=["GET"])
@@ -130,8 +136,7 @@ def get_customer(customer_id):
         return jsonify({"error": "Invalid customer ID"}), 400
 
 
-# -------- Bills --------
-
+# --- Bills ---
 @app.route("/api/bills", methods=["POST"])
 def create_bill():
     data = request.json
@@ -165,12 +170,11 @@ def list_bills():
 
 
 # ----------------------------
-# Background tasks example
+# Background Task Example
 # ----------------------------
 def background_task():
     while True:
-        # Example: cleanup or scheduled jobs
-        pass
+        pass  # Example: cron jobs or cleanup tasks
 
 
 # ----------------------------
