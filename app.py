@@ -174,27 +174,44 @@ def home():
 
 @app.route("/api/settings/business", methods=["GET"])
 def get_business_settings():
-    try:
-        if not _use_memory:
-            doc = settings_collection.find_one({"key": "business"})
-            if doc:
-                return jsonify({"business": serialize_doc(doc.get("value", {}))})
-            # fallback static if not found
-        # memory fallback
-        return jsonify({"business": _memory["settings"]["business"]})
-    except Exception as e:
-        return log_and_500(e)
-
+    ...
+    
 @app.route("/api/settings/upi", methods=["GET"])
 def get_upi_settings():
+    ...
+    
+# ----------------------------
+# Routes - Bills
+# ----------------------------
+@app.route("/api/bills", methods=["POST"])
+def create_bill():
+    data = request.json
+    if not data or not data.get("customer_id") or not data.get("items"):
+        return jsonify({"error": "Customer ID and items are required"}), 400
+
     try:
-        if not _use_memory:
-            doc = settings_collection.find_one({"key": "upi"})
-            if doc:
-                return jsonify({"upi": serialize_doc(doc.get("value", {}))})
-        return jsonify({"upi": _memory["settings"]["upi"]})
-    except Exception as e:
-        return log_and_500(e)
+        customer = customers_collection.find_one({"_id": ObjectId(data["customer_id"])})
+        if not customer:
+            return jsonify({"error": "Customer not found"}), 404
+    except Exception:
+        return jsonify({"error": "Invalid customer ID"}), 400
+
+    # ✅ Sequential bill number logic
+    last_bill = bills_collection.find_one(sort=[("bill_number", -1)])
+    next_bill_number = 1 if not last_bill else last_bill.get("bill_number", 0) + 1
+
+    bill = {
+        "bill_number": next_bill_number,
+        "customer_id": data["customer_id"],
+        "items": data.get("items", []),
+        "total": data.get("total", 0),
+        "created_at": datetime.utcnow()
+    }
+
+    result = bills_collection.insert_one(bill)
+    bill["_id"] = str(result.inserted_id)
+
+    return jsonify({"message": "Bill created successfully", "bill": bill}), 201
 
 # ----------------------------
 # Customers
