@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pymongo import MongoClient
+from pymongo import MongoClient, errors
 from bson import ObjectId
 from datetime import datetime
 import os
@@ -18,7 +18,7 @@ ALLOWED_ORIGINS = [
     "https://star-frontend-chi.vercel.app"
 ]
 
-# Enable CORS globally
+# Enable CORS
 CORS(
     app,
     origins=ALLOWED_ORIGINS,
@@ -33,8 +33,6 @@ def after_request(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS,PATCH"
     return response
 
 
@@ -42,34 +40,41 @@ def after_request(response):
 # MongoDB Setup
 # ----------------------------
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-
 try:
-    client.admin.command("ping")
-    print("✅ MongoDB connected successfully")
-except Exception as e:
-    print(f"❌ MongoDB connection failed: {e}")
-
-db = client["start-billing"]
-customers_collection = db["customers"]
-bills_collection = db["bills"]
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    client.server_info()  # Force connection test
+    db = client["start-billing"]
+    customers_collection = db["customers"]
+    bills_collection = db["bills"]
+except errors.ServerSelectionTimeoutError:
+    print("❌ Could not connect to MongoDB. Check MONGO_URI.")
+    client = None
+    db = None
+    customers_collection = None
+    bills_collection = None
 
 
 # ----------------------------
-# Utility: JSON Encoder for ObjectId
+# Utility: JSON Encoder for ObjectId + datetime
 # ----------------------------
 def serialize_doc(doc):
-    """Convert MongoDB ObjectId to string for JSON responses."""
-    if "_id" in doc:
-        doc["_id"] = str(doc["_id"])
-    return doc
+    if not doc:
+        return None
+    new_doc = {}
+    for key, value in doc.items():
+        if isinstance(value, ObjectId):
+            new_doc[key] = str(value)
+        elif isinstance(value, datetime):
+            new_doc[key] = value.isoformat()
+        else:
+            new_doc[key] = value
+    return new_doc
 
 
 # ----------------------------
 # API ROUTES
 # ----------------------------
 
-# --- Settings ---
 @app.route("/api/settings/business", methods=["GET"])
 def get_business_settings():
     return jsonify({
@@ -87,46 +92,47 @@ def get_upi_settings():
     })
 
 
-# --- Customers ---
+# -------- Customers --------
 @app.route("/api/customers", methods=["POST"])
 def create_customer():
+    if not customers_collection:
+        return jsonify({"error": "Database not connected"}), 500
+
     data = request.json
     if not data or not data.get("name") or not data.get("phone"):
         return jsonify({"error": "Name and phone are required"}), 400
 
-    now = datetime.utcnow()
     result = customers_collection.insert_one({
         "name": data.get("name"),
         "phone": data.get("phone"),
         "email": data.get("email", ""),
         "address": data.get("address", ""),
         "notes": data.get("notes", ""),
-        "created_at": now,
-        "updated_at": now
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
     })
 
-    customer = {
-        "_id": str(result.inserted_id),
-        "name": data.get("name"),
-        "phone": data.get("phone"),
-        "email": data.get("email", ""),
-        "address": data.get("address", ""),
-        "notes": data.get("notes", ""),
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat()
-    }
-
-    return jsonify({"message": "Customer created successfully", "customer": customer}), 201
+    customer = customers_collection.find_one({"_id": result.inserted_id})
+    return jsonify({"message": "Customer created successfully", "customer": serialize_doc(customer)}), 201
 
 
 @app.route("/api/customers", methods=["GET"])
 def list_customers():
-    customers = [serialize_doc(c) for c in customers_collection.find()]
-    return jsonify(customers)
+    if not customers_collection:
+        return jsonify({"error": "Database not connected"}), 500
+
+    try:
+        customers = [serialize_doc(c) for c in customers_collection.find()]
+        return jsonify(customers)
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch customers: {str(e)}"}), 500
 
 
 @app.route("/api/customers/<customer_id>", methods=["GET"])
 def get_customer(customer_id):
+    if not customers_collection:
+        return jsonify({"error": "Database not connected"}), 500
+
     try:
         customer = customers_collection.find_one({"_id": ObjectId(customer_id)})
         if not customer:
@@ -136,9 +142,12 @@ def get_customer(customer_id):
         return jsonify({"error": "Invalid customer ID"}), 400
 
 
-# --- Bills ---
+# -------- Bills --------
 @app.route("/api/bills", methods=["POST"])
 def create_bill():
+    if not bills_collection or not customers_collection:
+        return jsonify({"error": "Database not connected"}), 500
+
     data = request.json
     if not data or not data.get("customer_id") or not data.get("items"):
         return jsonify({"error": "Customer ID and items are required"}), 400
@@ -160,21 +169,27 @@ def create_bill():
     result = bills_collection.insert_one(bill)
     bill["_id"] = str(result.inserted_id)
 
-    return jsonify({"message": "Bill created successfully", "bill": bill}), 201
+    return jsonify({"message": "Bill created successfully", "bill": serialize_doc(bill)}), 201
 
 
 @app.route("/api/bills", methods=["GET"])
 def list_bills():
-    bills = [serialize_doc(b) for b in bills_collection.find()]
-    return jsonify(bills)
+    if not bills_collection:
+        return jsonify({"error": "Database not connected"}), 500
+
+    try:
+        bills = [serialize_doc(b) for b in bills_collection.find()]
+        return jsonify(bills)
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch bills: {str(e)}"}), 500
 
 
 # ----------------------------
-# Background Task Example
+# Background tasks example
 # ----------------------------
 def background_task():
     while True:
-        pass  # Example: cron jobs or cleanup tasks
+        pass  # Placeholder for cron jobs
 
 
 # ----------------------------
