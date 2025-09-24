@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 """
 app.py - Flask API for Start-B (drop-in ready)
-
-Features:
- - CORS fixed for preflight (Content-Type allowed)
- - /api/settings/business, /api/settings/upi endpoints
- - /api/customers (GET/POST/GET by id/DELETE)
- - /api/bills (GET/POST)
- - MongoDB if MONGO_URI provided, otherwise an in-memory fallback
- - Helpful JSON responses matching frontend expectations
 """
 
 from flask import Flask, request, jsonify, make_response
@@ -23,15 +15,11 @@ import uuid
 import logging
 import traceback
 
-# Load local .env if present (useful for local dev)
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("start-b-api")
 
-# ----------------------------
-# App & CORS
-# ----------------------------
 app = Flask(__name__)
 
 ALLOWED_ORIGINS = [
@@ -40,7 +28,6 @@ ALLOWED_ORIGINS = [
     "https://star-frontend-chi.vercel.app"
 ]
 
-# Configure flask-cors for /api/* routes
 CORS(
     app,
     resources={r"/api/*": {"origins": ALLOWED_ORIGINS}},
@@ -50,7 +37,6 @@ CORS(
     expose_headers=["Content-Type", "Authorization"]
 )
 
-# Ensure preflight OPTIONS responses have the headers the browser expects.
 @app.before_request
 def _handle_options_preflight():
     if request.method == "OPTIONS":
@@ -61,22 +47,20 @@ def _handle_options_preflight():
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
         resp.headers["Access-Control-Allow-Credentials"] = "true"
-        return resp  # short-circuit for preflight
-
+        return resp
 
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
-    # Always include these so preflights pass (Content-Type allowed)
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
     response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
 # ----------------------------
-# Database: try MongoDB, fallback to in-memory
+# Database
 # ----------------------------
 MONGO_URI = os.getenv("MONGO_URI", "").strip() or None
 DB_NAME = os.getenv("DB_NAME", "start_billing")
@@ -109,15 +93,14 @@ _memory = None
 
 if MONGO_URI:
     try:
-        # Try a simple connect/ping
-        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-        # ping to verify connection
+        client = MongoClient(
+            MONGO_URI,
+            serverSelectionTimeoutMS=5000,
+            tls=True,
+            tlsAllowInvalidCertificates=True  # fix SSL handshake on Render
+        )
         client.admin.command("ping")
-        # Get DB: either default or DB_NAME
-        try:
-            db = client.get_database()
-        except Exception:
-            db = client[DB_NAME]
+        db = client.get_database(DB_NAME)
         customers_collection = db["customers"]
         bills_collection = db["bills"]
         settings_collection = db["settings"]
@@ -144,7 +127,6 @@ def iso(dt):
     return dt
 
 def serialize_doc(doc: dict):
-    """Return a JSON-serializable copy of a db doc (ObjectId -> str, datetimes -> iso)."""
     if not doc:
         return doc
     out = {}
@@ -155,7 +137,6 @@ def serialize_doc(doc: dict):
             out[k] = iso(v)
         else:
             out[k] = v
-    # ensure _id is string
     if "_id" in out:
         out["_id"] = str(out["_id"])
     return out
@@ -175,43 +156,10 @@ def home():
 @app.route("/api/settings/business", methods=["GET"])
 def get_business_settings():
     ...
-    
+
 @app.route("/api/settings/upi", methods=["GET"])
 def get_upi_settings():
     ...
-    
-# ----------------------------
-# Routes - Bills
-# ----------------------------
-@app.route("/api/bills", methods=["POST"])
-def create_bill():
-    data = request.json
-    if not data or not data.get("customer_id") or not data.get("items"):
-        return jsonify({"error": "Customer ID and items are required"}), 400
-
-    try:
-        customer = customers_collection.find_one({"_id": ObjectId(data["customer_id"])})
-        if not customer:
-            return jsonify({"error": "Customer not found"}), 404
-    except Exception:
-        return jsonify({"error": "Invalid customer ID"}), 400
-
-    # ✅ Sequential bill number logic
-    last_bill = bills_collection.find_one(sort=[("bill_number", -1)])
-    next_bill_number = 1 if not last_bill else last_bill.get("bill_number", 0) + 1
-
-    bill = {
-        "bill_number": next_bill_number,
-        "customer_id": data["customer_id"],
-        "items": data.get("items", []),
-        "total": data.get("total", 0),
-        "created_at": datetime.utcnow()
-    }
-
-    result = bills_collection.insert_one(bill)
-    bill["_id"] = str(result.inserted_id)
-
-    return jsonify({"message": "Bill created successfully", "bill": bill}), 201
 
 # ----------------------------
 # Customers
@@ -259,7 +207,6 @@ def create_customer():
             }
             result = customers_collection.insert_one(payload)
             inserted_id = result.inserted_id
-            # return customer in shape frontend expects
             customer = {
                 "_id": str(inserted_id),
                 "name": name,
@@ -322,10 +269,9 @@ def get_customer(customer_id):
 def delete_customer(customer_id):
     try:
         deleted_bills = 0
-        deleted_jobs = 0  # placeholder if you have jobs collection
+        deleted_jobs = 0
         if _use_memory:
             if customer_id in _memory["customers"]:
-                # delete bills referencing this customer
                 bills_to_delete = [bid for bid, b in _memory["bills"].items() if b.get("customer_id") == customer_id]
                 for bid in bills_to_delete:
                     _memory["bills"].pop(bid, None)
@@ -335,10 +281,8 @@ def delete_customer(customer_id):
             else:
                 return jsonify({"error": "Customer not found"}), 404
         else:
-            # delete bills first
             res = bills_collection.delete_many({"customer_id": customer_id})
             deleted_bills = res.deleted_count
-            # delete customer
             res2 = customers_collection.delete_one({"_id": ObjectId(customer_id)})
             if res2.deleted_count == 0:
                 return jsonify({"error": "Customer not found"}), 404
@@ -347,7 +291,7 @@ def delete_customer(customer_id):
         return log_and_500(e)
 
 # ----------------------------
-# Bills
+# Bills (with sequential numbers)
 # ----------------------------
 @app.route("/api/bills", methods=["POST"])
 def create_bill():
@@ -361,23 +305,28 @@ def create_bill():
         if not customer_id or not isinstance(items, list):
             return jsonify({"error": "customer_id and items[] required"}), 400
 
-        # verify customer exists
+        now = datetime.utcnow()
+
         if _use_memory:
+            # sequential bill number in memory
+            last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
+            next_number = last_number + 1
+
             if customer_id not in _memory["customers"]:
                 return jsonify({"error": "Customer not found"}), 404
+
             new_id = gen_id()
-            now = iso(datetime.utcnow())
             bill = {
                 "_id": new_id,
+                "bill_number": next_number,
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
                 "total": total,
-                "created_at": now,
+                "created_at": iso(now),
                 "status": "unpaid"
             }
             _memory["bills"][new_id] = bill
-            # attach to customer
             cust = _memory["customers"][customer_id]
             cust.setdefault("bills", []).append(bill)
             cust["total_orders"] = (cust.get("total_orders") or 0) + 1
@@ -385,14 +334,19 @@ def create_bill():
             logger.info("Created bill (memory) id=%s for customer=%s", new_id, customer_id)
             return jsonify({"message": "Bill created", "bill": bill}), 201
         else:
+            # sequential bill number in MongoDB
+            last_bill = bills_collection.find_one(sort=[("bill_number", -1)])
+            next_number = 1 if not last_bill else last_bill.get("bill_number", 0) + 1
+
             try:
                 cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
             except Exception:
                 return jsonify({"error": "Invalid customer ID"}), 400
             if not cust_doc:
                 return jsonify({"error": "Customer not found"}), 404
-            now = datetime.utcnow()
+
             bill_doc = {
+                "bill_number": next_number,
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
@@ -402,11 +356,9 @@ def create_bill():
             }
             res = bills_collection.insert_one(bill_doc)
             bill_doc["_id"] = str(res.inserted_id)
-            # (optional) update customer counters
             customers_collection.update_one({"_id": ObjectId(customer_id)}, {"$inc": {"total_orders": 1, "total_spent": total}})
-            logger.info("Created bill id=%s for customer=%s", bill_doc["_id"], customer_id)
-            # convert datetimes
             bill_doc["created_at"] = iso(now)
+            logger.info("Created bill id=%s for customer=%s", bill_doc["_id"], customer_id)
             return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
         return log_and_500(e)
@@ -426,12 +378,10 @@ def list_bills():
         return log_and_500(e)
 
 # ----------------------------
-# Background task (example)
+# Background task
 # ----------------------------
 def background_task():
-    # placeholder for periodic jobs (cleanup, stats)
     while True:
-        # sleep to avoid busy loop; no heavy work here in demo
         try:
             threading.Event().wait(30)
         except Exception:
