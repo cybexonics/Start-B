@@ -2371,6 +2371,26 @@ if __name__ == '__main__':
     debug_mode = os.getenv('DEBUG', 'True').lower() == 'true'
     print(f"🚀 Starting Flask server on port {port}, debug={debug_mode}")
     print(f"🔧 CORS configured for origins: {ALLOWED_ORIGINS}")
+
+    # ------------------------------
+# Settings Routes (Fix for 404)
+# ------------------------------
+
+@app.route('/api/settings/business', methods=['GET'])
+def get_business_settings():
+    # Example static response (replace with DB later if needed)
+    return jsonify({
+        "business_name": "My Shop",
+        "address": "123 Street",
+        "phone": "9876543210"
+    })
+
+@app.route('/api/settings/upi', methods=['GET'])
+def get_upi_settings():
+    return jsonify({
+        "upi_id": "myshop@upi",
+        "qr_code_url": "https://example.com/qr.png"
+    })
     
     # Run with debug mode for local development
     app.run(debug=debug_mode, host='0.0.0.0', port=port, threaded=True)
