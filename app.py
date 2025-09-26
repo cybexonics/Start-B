@@ -293,6 +293,7 @@ def create_bill():
             bill = {
                 "_id": new_id,
                 "bill_number": next_number,
+                "bill_no_str": str(next_number).zfill(3),  # <-- Added formatted version
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
@@ -310,6 +311,7 @@ def create_bill():
             next_number = get_next_bill_number()
             bill_doc = {
                 "bill_number": next_number,
+                "bill_no_str": str(next_number).zfill(3),  # <-- Added formatted version
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
