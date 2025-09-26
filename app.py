@@ -293,7 +293,6 @@ def create_bill():
             bill = {
                 "_id": new_id,
                 "bill_number": next_number,
-                "bill_no_str": str(next_number).zfill(3),  # <-- Added formatted version
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
@@ -311,7 +310,6 @@ def create_bill():
             next_number = get_next_bill_number()
             bill_doc = {
                 "bill_number": next_number,
-                "bill_no_str": str(next_number).zfill(3),  # <-- Added formatted version
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
@@ -341,6 +339,39 @@ def list_bills():
             for doc in cursor:
                 bills_list.append(serialize_doc(doc))
         return jsonify({"bills": bills_list})
+    except Exception as e:
+        return log_and_500(e)
+
+# ----------------------------
+# Admin Dashboard Placeholder APIs
+# ----------------------------
+@app.route("/api/tailors", methods=["GET"])
+def list_tailors():
+    try:
+        return jsonify({"tailors": []})
+    except Exception as e:
+        return log_and_500(e)
+
+@app.route("/api/jobs", methods=["GET"])
+def list_jobs():
+    try:
+        return jsonify({"jobs": []})
+    except Exception as e:
+        return log_and_500(e)
+
+@app.route("/api/dashboard/stats", methods=["GET"])
+def dashboard_stats():
+    try:
+        stats = {
+            "total_customers": len(_memory["customers"]) if _use_memory else customers_collection.count_documents({}),
+            "total_bills": len(_memory["bills"]) if _use_memory else bills_collection.count_documents({}),
+            "total_revenue": (
+                sum([b.get("total", 0) for b in _memory["bills"].values()])
+                if _use_memory
+                else sum([b.get("total", 0) for b in bills_collection.find()])
+            ),
+        }
+        return jsonify(stats)
     except Exception as e:
         return log_and_500(e)
 
