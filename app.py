@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-app.py - Flask API for Start-B (drop-in ready) with atomic sequential bill numbers
+app.py - Flask API for Start-B with MongoDB + sequential bills + fixed settings routes
 """
 
 from flask import Flask, request, jsonify, make_response
@@ -14,7 +14,7 @@ import threading
 import uuid
 import logging
 import traceback
-import certifi   # 👈 Added for SSL CA file
+import certifi   # for SSL CA file
 
 load_dotenv()
 
@@ -23,6 +23,9 @@ logger = logging.getLogger("start-b-api")
 
 app = Flask(__name__)
 
+# ----------------------------
+# CORS Config
+# ----------------------------
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -87,8 +90,7 @@ def make_in_memory_store():
                 "upi_id": "demo@upi",
                 "qr_code_url": ""
             }
-        },
-        "counters": {"bill_number": 0}  # 👈 memory counter for bills
+        }
     }
 
 _memory = None
@@ -99,7 +101,7 @@ if MONGO_URI:
             MONGO_URI,
             serverSelectionTimeoutMS=5000,
             tls=True,
-            tlsCAFile=certifi.where()  # 👈 Use proper CA file
+            tlsCAFile=certifi.where()
         )
         client.admin.command("ping")
         db = client.get_database(DB_NAME)
@@ -113,7 +115,7 @@ if MONGO_URI:
         _use_memory = True
         _memory = make_in_memory_store()
 else:
-    logger.info("ℹ️  No MONGO_URI provided — using in-memory fallback for demo")
+    logger.info("ℹ️  No MONGO_URI provided — using in-memory fallback")
     _use_memory = True
     _memory = make_in_memory_store()
 
@@ -149,13 +151,9 @@ def log_and_500(e):
     return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 # ----------------------------
-# MongoDB atomic sequential bill number
+# Atomic sequential bill number
 # ----------------------------
 def get_next_bill_number():
-    if _use_memory:
-        _memory["counters"]["bill_number"] += 1
-        return _memory["counters"]["bill_number"]
-
     counter = db["counters"]
     result = counter.find_one_and_update(
         {"_id": "bill_number"},
@@ -171,6 +169,28 @@ def get_next_bill_number():
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "Backend running ✅"})
+
+@app.route("/api/settings/business", methods=["GET"])
+def get_business_settings():
+    try:
+        if _use_memory:
+            return jsonify(_memory["settings"]["business"])
+        else:
+            doc = settings_collection.find_one({"_id": "business"}) or {}
+            return jsonify(doc)
+    except Exception as e:
+        return log_and_500(e)
+
+@app.route("/api/settings/upi", methods=["GET"])
+def get_upi_settings():
+    try:
+        if _use_memory:
+            return jsonify(_memory["settings"]["upi"])
+        else:
+            doc = settings_collection.find_one({"_id": "upi"}) or {}
+            return jsonify(doc)
+    except Exception as e:
+        return log_and_500(e)
 
 # ----------------------------
 # Customers
@@ -204,7 +224,7 @@ def create_customer():
                 "bills": []
             }
             _memory["customers"][new_id] = customer
-            return jsonify({"message": "Customer created successfully", "customer": customer}), 201
+            return jsonify({"message": "Customer created", "customer": customer}), 201
         else:
             payload = {
                 "name": name,
@@ -214,13 +234,36 @@ def create_customer():
                 "notes": data.get("notes", ""),
                 "created_at": now,
                 "updated_at": now,
+                "total_orders": 0,
+                "total_spent": 0,
+                "outstanding_balance": 0,
+                "bills": []
             }
             result = customers_collection.insert_one(payload)
-            inserted_id = result.inserted_id
-            customer = serialize_doc(payload)
-            customer["_id"] = str(inserted_id)
-            customer.update({"total_orders": 0, "total_spent": 0, "outstanding_balance": 0, "bills": []})
-            return jsonify({"message": "Customer created successfully", "customer": customer}), 201
+            payload["_id"] = str(result.inserted_id)
+            payload["created_at"] = iso(now)
+            payload["updated_at"] = iso(now)
+            return jsonify({"message": "Customer created", "customer": payload}), 201
+    except Exception as e:
+        return log_and_500(e)
+
+@app.route("/api/customers", methods=["GET"])
+def list_customers():
+    try:
+        search = request.args.get("search", "").strip()
+        customers_list = []
+        if _use_memory:
+            for c in _memory["customers"].values():
+                if not search or search.lower() in c.get("name", "").lower() or search in c.get("phone", ""):
+                    customers_list.append(c)
+        else:
+            query = {}
+            if search:
+                query = {"$or": [{"name": {"$regex": search, "$options": "i"}}, {"phone": {"$regex": search}}]}
+            cursor = customers_collection.find(query).sort("created_at", -1)
+            for doc in cursor:
+                customers_list.append(serialize_doc(doc))
+        return jsonify({"customers": customers_list})
     except Exception as e:
         return log_and_500(e)
 
@@ -240,9 +283,10 @@ def create_bill():
             return jsonify({"error": "customer_id and items[] required"}), 400
 
         now = datetime.utcnow()
-        next_number = get_next_bill_number()  # 👈 sequential bill no.
 
         if _use_memory:
+            last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
+            next_number = last_number + 1
             if customer_id not in _memory["customers"]:
                 return jsonify({"error": "Customer not found"}), 404
             new_id = gen_id()
@@ -257,19 +301,13 @@ def create_bill():
                 "status": "unpaid"
             }
             _memory["bills"][new_id] = bill
-            cust = _memory["customers"][customer_id]
-            cust.setdefault("bills", []).append(bill)
-            cust["total_orders"] = cust.get("total_orders", 0) + 1
-            cust["total_spent"] = cust.get("total_spent", 0) + total
+            _memory["customers"][customer_id].setdefault("bills", []).append(bill)
             return jsonify({"message": "Bill created", "bill": bill}), 201
         else:
-            try:
-                cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
-            except Exception:
-                return jsonify({"error": "Invalid customer ID"}), 400
+            cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
             if not cust_doc:
                 return jsonify({"error": "Customer not found"}), 404
-
+            next_number = get_next_bill_number()
             bill_doc = {
                 "bill_number": next_number,
                 "customer_id": customer_id,
@@ -281,11 +319,11 @@ def create_bill():
             }
             res = bills_collection.insert_one(bill_doc)
             bill_doc["_id"] = str(res.inserted_id)
+            bill_doc["created_at"] = iso(now)
             customers_collection.update_one(
                 {"_id": ObjectId(customer_id)},
                 {"$inc": {"total_orders": 1, "total_spent": total}}
             )
-            bill_doc["created_at"] = iso(now)
             return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
         return log_and_500(e)
