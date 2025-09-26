@@ -87,7 +87,8 @@ def make_in_memory_store():
                 "upi_id": "demo@upi",
                 "qr_code_url": ""
             }
-        }
+        },
+        "counters": {"bill_number": 0}  # 👈 memory counter for bills
     }
 
 _memory = None
@@ -151,6 +152,10 @@ def log_and_500(e):
 # MongoDB atomic sequential bill number
 # ----------------------------
 def get_next_bill_number():
+    if _use_memory:
+        _memory["counters"]["bill_number"] += 1
+        return _memory["counters"]["bill_number"]
+
     counter = db["counters"]
     result = counter.find_one_and_update(
         {"_id": "bill_number"},
@@ -166,14 +171,6 @@ def get_next_bill_number():
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "ok", "message": "Backend running ✅"})
-
-@app.route("/api/settings/business", methods=["GET"])
-def get_business_settings():
-    ...
-
-@app.route("/api/settings/upi", methods=["GET"])
-def get_upi_settings():
-    ...
 
 # ----------------------------
 # Customers
@@ -220,85 +217,10 @@ def create_customer():
             }
             result = customers_collection.insert_one(payload)
             inserted_id = result.inserted_id
-            customer = {
-                "_id": str(inserted_id),
-                "name": name,
-                "phone": phone,
-                "email": payload["email"],
-                "address": payload["address"],
-                "notes": payload["notes"],
-                "created_at": iso(now),
-                "updated_at": iso(now),
-                "total_orders": 0,
-                "total_spent": 0,
-                "outstanding_balance": 0,
-                "bills": []
-            }
+            customer = serialize_doc(payload)
+            customer["_id"] = str(inserted_id)
+            customer.update({"total_orders": 0, "total_spent": 0, "outstanding_balance": 0, "bills": []})
             return jsonify({"message": "Customer created successfully", "customer": customer}), 201
-    except Exception as e:
-        return log_and_500(e)
-
-@app.route("/api/customers", methods=["GET"])
-def list_customers():
-    try:
-        search = request.args.get("search", "").strip()
-        customers_list = []
-        if _use_memory:
-            for c in _memory["customers"].values():
-                if not search or search.lower() in c.get("name", "").lower() or search in c.get("phone", ""):
-                    customers_list.append(c)
-        else:
-            query = {}
-            if search:
-                query = {"$or": [{"name": {"$regex": search, "$options": "i"}}, {"phone": {"$regex": search}}]}
-            cursor = customers_collection.find(query).sort("created_at", -1)
-            for doc in cursor:
-                customers_list.append(serialize_doc(doc))
-        return jsonify({"customers": customers_list})
-    except Exception as e:
-        return log_and_500(e)
-
-@app.route("/api/customers/<customer_id>", methods=["GET"])
-def get_customer(customer_id):
-    try:
-        if _use_memory:
-            c = _memory["customers"].get(customer_id)
-            if not c:
-                return jsonify({"error": "Customer not found"}), 404
-            return jsonify({"customer": c})
-        else:
-            try:
-                doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
-            except Exception:
-                return jsonify({"error": "Invalid customer ID"}), 400
-            if not doc:
-                return jsonify({"error": "Customer not found"}), 404
-            return jsonify({"customer": serialize_doc(doc)})
-    except Exception as e:
-        return log_and_500(e)
-
-@app.route("/api/customers/<customer_id>", methods=["DELETE"])
-def delete_customer(customer_id):
-    try:
-        deleted_bills = 0
-        deleted_jobs = 0
-        if _use_memory:
-            if customer_id in _memory["customers"]:
-                bills_to_delete = [bid for bid, b in _memory["bills"].items() if b.get("customer_id") == customer_id]
-                for bid in bills_to_delete:
-                    _memory["bills"].pop(bid, None)
-                deleted_bills = len(bills_to_delete)
-                _memory["customers"].pop(customer_id, None)
-                return jsonify({"message": "Customer deleted", "deleted_bills": deleted_bills, "deleted_jobs": deleted_jobs})
-            else:
-                return jsonify({"error": "Customer not found"}), 404
-        else:
-            res = bills_collection.delete_many({"customer_id": customer_id})
-            deleted_bills = res.deleted_count
-            res2 = customers_collection.delete_one({"_id": ObjectId(customer_id)})
-            if res2.deleted_count == 0:
-                return jsonify({"error": "Customer not found"}), 404
-            return jsonify({"message": "Customer deleted", "deleted_bills": deleted_bills, "deleted_jobs": deleted_jobs})
     except Exception as e:
         return log_and_500(e)
 
@@ -318,14 +240,11 @@ def create_bill():
             return jsonify({"error": "customer_id and items[] required"}), 400
 
         now = datetime.utcnow()
+        next_number = get_next_bill_number()  # 👈 sequential bill no.
 
         if _use_memory:
-            last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
-            next_number = last_number + 1
-
             if customer_id not in _memory["customers"]:
                 return jsonify({"error": "Customer not found"}), 404
-
             new_id = gen_id()
             bill = {
                 "_id": new_id,
@@ -340,8 +259,8 @@ def create_bill():
             _memory["bills"][new_id] = bill
             cust = _memory["customers"][customer_id]
             cust.setdefault("bills", []).append(bill)
-            cust["total_orders"] = (cust.get("total_orders") or 0) + 1
-            cust["total_spent"] = (cust.get("total_spent") or 0) + total
+            cust["total_orders"] = cust.get("total_orders", 0) + 1
+            cust["total_spent"] = cust.get("total_spent", 0) + total
             return jsonify({"message": "Bill created", "bill": bill}), 201
         else:
             try:
@@ -350,8 +269,6 @@ def create_bill():
                 return jsonify({"error": "Invalid customer ID"}), 400
             if not cust_doc:
                 return jsonify({"error": "Customer not found"}), 404
-
-            next_number = get_next_bill_number()  # atomic sequential number
 
             bill_doc = {
                 "bill_number": next_number,
@@ -364,7 +281,10 @@ def create_bill():
             }
             res = bills_collection.insert_one(bill_doc)
             bill_doc["_id"] = str(res.inserted_id)
-            customers_collection.update_one({"_id": ObjectId(customer_id)}, {"$inc": {"total_orders": 1, "total_spent": total}})
+            customers_collection.update_one(
+                {"_id": ObjectId(customer_id)},
+                {"$inc": {"total_orders": 1, "total_spent": total}}
+            )
             bill_doc["created_at"] = iso(now)
             return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
