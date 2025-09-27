@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-app.py - Flask API for Start-B with MongoDB + sequential bills + UPI QR support
+app.py - Flask API for Star-B with MongoDB + sequential bills + memory fallback
 """
 
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from bson import ObjectId
 from datetime import datetime
 from dotenv import load_dotenv
@@ -14,15 +14,14 @@ import threading
 import uuid
 import logging
 import traceback
-import certifi   # for SSL CA file
-import qrcode
-import base64
-from io import BytesIO
+import certifi  # SSL CA file for MongoDB Atlas
 
+# ----------------------------
+# Setup
+# ----------------------------
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("start-b-api")
+logger = logging.getLogger("star-b-api")
 
 app = Flask(__name__)
 
@@ -41,8 +40,9 @@ CORS(
     supports_credentials=True,
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
-    expose_headers=["Content-Type", "Authorization"]
+    expose_headers=["Content-Type", "Authorization"],
 )
+
 
 @app.before_request
 def _handle_options_preflight():
@@ -51,33 +51,36 @@ def _handle_options_preflight():
         origin = request.headers.get("Origin")
         if origin and origin in ALLOWED_ORIGINS:
             resp.headers["Access-Control-Allow-Origin"] = origin
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-        resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
         return resp
+
 
 @app.after_request
 def add_cors_headers(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
+
 # ----------------------------
-# Database
+# Database Setup
 # ----------------------------
 MONGO_URI = os.getenv("MONGO_URI", "").strip() or None
 DB_NAME = os.getenv("MONGO_DB_NAME", "start_billing")
-_use_memory = False
 
+_use_memory = False
 client = None
 db = None
 customers_collection = None
 bills_collection = None
 settings_collection = None
+
 
 def make_in_memory_store():
     return {
@@ -90,11 +93,12 @@ def make_in_memory_store():
                 "phone": "0000000000",
             },
             "upi": {
-                "upi_id": "raghukatti9912-1@okhdfcbank",   # Default UPI
+                "upi_id": "demo@upi",
                 "qr_code_url": ""
             }
         }
     }
+
 
 _memory = None
 
@@ -111,16 +115,17 @@ if MONGO_URI:
         customers_collection = db["customers"]
         bills_collection = db["bills"]
         settings_collection = db["settings"]
-        logger.info("✅ MongoDB connected (MONGO_URI provided)")
+        logger.info("✅ MongoDB connected")
     except Exception as e:
         logger.error("❌ MongoDB connection failed: %s", e)
         logger.error(traceback.format_exc())
         _use_memory = True
         _memory = make_in_memory_store()
 else:
-    logger.info("ℹ️  No MONGO_URI provided — using in-memory fallback")
+    logger.info("ℹ️ No MONGO_URI provided — using in-memory store")
     _use_memory = True
     _memory = make_in_memory_store()
+
 
 # ----------------------------
 # Utilities
@@ -128,10 +133,12 @@ else:
 def gen_id():
     return uuid.uuid4().hex
 
+
 def iso(dt):
     if isinstance(dt, datetime):
         return dt.isoformat()
     return dt
+
 
 def serialize_doc(doc: dict):
     if not doc:
@@ -148,34 +155,29 @@ def serialize_doc(doc: dict):
         out["_id"] = str(out["_id"])
     return out
 
+
 def log_and_500(e):
     logger.error("Exception: %s", e)
     logger.error(traceback.format_exc())
     return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
-# ----------------------------
-# QR Code Generator
-# ----------------------------
-def generate_upi_qr(upi_id: str, amount: float):
-    upi_url = f"upi://pay?pa={upi_id}&pn=MyShop&am={amount}&cu=INR"
-    qr = qrcode.make(upi_url)
-    buffered = BytesIO()
-    qr.save(buffered, format="PNG")
-    qr_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{qr_base64}"
 
 # ----------------------------
-# Atomic sequential bill number
+# Bill Number Generator
 # ----------------------------
 def get_next_bill_number():
-    counter = db["counters"]
-    result = counter.find_one_and_update(
-        {"_id": "bill_number"},
-        {"$inc": {"seq": 1}},
-        upsert=True,
-        return_document=True
-    )
-    return result["seq"]
+    try:
+        counter = db["counters"]
+        result = counter.find_one_and_update(
+            {"_id": "bill_number"},
+            {"$inc": {"seq": 1}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER
+        )
+        return result["seq"]
+    except Exception:
+        return 1
+
 
 # ----------------------------
 # Routes - Health / Settings
@@ -184,27 +186,28 @@ def get_next_bill_number():
 def home():
     return jsonify({"status": "ok", "message": "Backend running ✅"})
 
+
 @app.route("/api/settings/business", methods=["GET"])
 def get_business_settings():
     try:
         if _use_memory:
             return jsonify(_memory["settings"]["business"])
-        else:
-            doc = settings_collection.find_one({"_id": "business"}) or {}
-            return jsonify(doc)
+        doc = settings_collection.find_one({"_id": "business"}) or {}
+        return jsonify(serialize_doc(doc))
     except Exception as e:
         return log_and_500(e)
+
 
 @app.route("/api/settings/upi", methods=["GET"])
 def get_upi_settings():
     try:
         if _use_memory:
             return jsonify(_memory["settings"]["upi"])
-        else:
-            doc = settings_collection.find_one({"_id": "upi"}) or {}
-            return jsonify(doc)
+        doc = settings_collection.find_one({"_id": "upi"}) or {}
+        return jsonify(serialize_doc(doc))
     except Exception as e:
         return log_and_500(e)
+
 
 # ----------------------------
 # Customers
@@ -215,6 +218,7 @@ def create_customer():
         data = request.get_json(force=True, silent=True)
         if not data:
             return jsonify({"error": "Request body must be JSON"}), 400
+
         name = data.get("name")
         phone = data.get("phone")
         if not name or not phone:
@@ -239,33 +243,35 @@ def create_customer():
             }
             _memory["customers"][new_id] = customer
             return jsonify({"message": "Customer created", "customer": customer}), 201
-        else:
-            payload = {
-                "name": name,
-                "phone": phone,
-                "email": data.get("email", ""),
-                "address": data.get("address", ""),
-                "notes": data.get("notes", ""),
-                "created_at": now,
-                "updated_at": now,
-                "total_orders": 0,
-                "total_spent": 0,
-                "outstanding_balance": 0,
-                "bills": []
-            }
-            result = customers_collection.insert_one(payload)
-            payload["_id"] = str(result.inserted_id)
-            payload["created_at"] = iso(now)
-            payload["updated_at"] = iso(now)
-            return jsonify({"message": "Customer created", "customer": payload}), 201
+
+        payload = {
+            "name": name,
+            "phone": phone,
+            "email": data.get("email", ""),
+            "address": data.get("address", ""),
+            "notes": data.get("notes", ""),
+            "created_at": now,
+            "updated_at": now,
+            "total_orders": 0,
+            "total_spent": 0,
+            "outstanding_balance": 0,
+            "bills": []
+        }
+        result = customers_collection.insert_one(payload)
+        payload["_id"] = str(result.inserted_id)
+        payload["created_at"] = iso(now)
+        payload["updated_at"] = iso(now)
+        return jsonify({"message": "Customer created", "customer": payload}), 201
     except Exception as e:
         return log_and_500(e)
+
 
 @app.route("/api/customers", methods=["GET"])
 def list_customers():
     try:
         search = request.args.get("search", "").strip()
         customers_list = []
+
         if _use_memory:
             for c in _memory["customers"].values():
                 if not search or search.lower() in c.get("name", "").lower() or search in c.get("phone", ""):
@@ -273,13 +279,20 @@ def list_customers():
         else:
             query = {}
             if search:
-                query = {"$or": [{"name": {"$regex": search, "$options": "i"}}, {"phone": {"$regex": search}}]}
+                query = {
+                    "$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"phone": {"$regex": search}}
+                    ]
+                }
             cursor = customers_collection.find(query).sort("created_at", -1)
             for doc in cursor:
                 customers_list.append(serialize_doc(doc))
+
         return jsonify({"customers": customers_list})
     except Exception as e:
         return log_and_500(e)
+
 
 # ----------------------------
 # Bills
@@ -290,27 +303,23 @@ def create_bill():
         data = request.get_json(force=True, silent=True)
         if not data:
             return jsonify({"error": "Request body must be JSON"}), 400
+
         customer_id = data.get("customer_id")
         items = data.get("items", [])
         total = data.get("total", 0)
+
         if not customer_id or not isinstance(items, list):
             return jsonify({"error": "customer_id and items[] required"}), 400
 
         now = datetime.utcnow()
 
-        # Get UPI settings
-        upi_settings = (
-            _memory["settings"]["upi"]
-            if _use_memory
-            else settings_collection.find_one({"_id": "upi"}) or {}
-        )
-        upi_id = upi_settings.get("upi_id", "raghukatti9912-1@okhdfcbank")
-
         if _use_memory:
             last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
             next_number = last_number + 1
+
             if customer_id not in _memory["customers"]:
                 return jsonify({"error": "Customer not found"}), 404
+
             new_id = gen_id()
             bill = {
                 "_id": new_id,
@@ -321,38 +330,39 @@ def create_bill():
                 "subtotal": total,
                 "total": total,
                 "created_at": iso(now),
-                "status": "unpaid",
-                "qr_code": generate_upi_qr(upi_id, total)
+                "status": "unpaid"
             }
             _memory["bills"][new_id] = bill
             _memory["customers"][customer_id].setdefault("bills", []).append(bill)
             return jsonify({"message": "Bill created", "bill": bill}), 201
-        else:
-            cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
-            if not cust_doc:
-                return jsonify({"error": "Customer not found"}), 404
-            next_number = get_next_bill_number()
-            bill_doc = {
-                "bill_number": next_number,
-                "bill_no_str": str(next_number).zfill(5),
-                "customer_id": customer_id,
-                "items": items,
-                "subtotal": total,
-                "total": total,
-                "created_at": now,
-                "status": "unpaid",
-                "qr_code": generate_upi_qr(upi_id, total)
-            }
-            res = bills_collection.insert_one(bill_doc)
-            bill_doc["_id"] = str(res.inserted_id)
-            bill_doc["created_at"] = iso(now)
-            customers_collection.update_one(
-                {"_id": ObjectId(customer_id)},
-                {"$inc": {"total_orders": 1, "total_spent": total}}
-            )
-            return jsonify({"message": "Bill created", "bill": bill_doc}), 201
+
+        cust_doc = customers_collection.find_one({"_id": ObjectId(customer_id)})
+        if not cust_doc:
+            return jsonify({"error": "Customer not found"}), 404
+
+        next_number = get_next_bill_number()
+        bill_doc = {
+            "bill_number": next_number,
+            "bill_no_str": str(next_number).zfill(5),
+            "customer_id": customer_id,
+            "items": items,
+            "subtotal": total,
+            "total": total,
+            "created_at": now,
+            "status": "unpaid"
+        }
+        res = bills_collection.insert_one(bill_doc)
+        bill_doc["_id"] = str(res.inserted_id)
+        bill_doc["created_at"] = iso(now)
+
+        customers_collection.update_one(
+            {"_id": ObjectId(customer_id)},
+            {"$inc": {"total_orders": 1, "total_spent": total}}
+        )
+        return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
         return log_and_500(e)
+
 
 @app.route("/api/bills", methods=["GET"])
 def list_bills():
@@ -368,22 +378,19 @@ def list_bills():
     except Exception as e:
         return log_and_500(e)
 
+
 # ----------------------------
-# Admin Dashboard Placeholder APIs
+# Admin Dashboard APIs
 # ----------------------------
 @app.route("/api/tailors", methods=["GET"])
 def list_tailors():
-    try:
-        return jsonify({"tailors": []})
-    except Exception as e:
-        return log_and_500(e)
+    return jsonify({"tailors": []})
+
 
 @app.route("/api/jobs", methods=["GET"])
 def list_jobs():
-    try:
-        return jsonify({"jobs": []})
-    except Exception as e:
-        return log_and_500(e)
+    return jsonify({"jobs": []})
+
 
 @app.route("/api/dashboard/stats", methods=["GET"])
 def dashboard_stats():
@@ -401,8 +408,9 @@ def dashboard_stats():
     except Exception as e:
         return log_and_500(e)
 
+
 # ----------------------------
-# Background task
+# Background Task
 # ----------------------------
 def background_task():
     while True:
@@ -410,6 +418,7 @@ def background_task():
             threading.Event().wait(30)
         except Exception:
             break
+
 
 # ----------------------------
 # Run
