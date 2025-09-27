@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-app.py - Flask API for Start-B with MongoDB + sequential bills + fixed settings routes
+app.py - Flask API for Start-B with MongoDB + sequential bills + UPI QR support
 """
 
 from flask import Flask, request, jsonify, make_response
@@ -15,6 +15,9 @@ import uuid
 import logging
 import traceback
 import certifi   # for SSL CA file
+import qrcode
+import base64
+from io import BytesIO
 
 load_dotenv()
 
@@ -87,7 +90,7 @@ def make_in_memory_store():
                 "phone": "0000000000",
             },
             "upi": {
-                "upi_id": "demo@upi",
+                "upi_id": "raghukatti9912-1@okhdfcbank",   # Default UPI
                 "qr_code_url": ""
             }
         }
@@ -149,6 +152,17 @@ def log_and_500(e):
     logger.error("Exception: %s", e)
     logger.error(traceback.format_exc())
     return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+# ----------------------------
+# QR Code Generator
+# ----------------------------
+def generate_upi_qr(upi_id: str, amount: float):
+    upi_url = f"upi://pay?pa={upi_id}&pn=MyShop&am={amount}&cu=INR"
+    qr = qrcode.make(upi_url)
+    buffered = BytesIO()
+    qr.save(buffered, format="PNG")
+    qr_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{qr_base64}"
 
 # ----------------------------
 # Atomic sequential bill number
@@ -284,6 +298,14 @@ def create_bill():
 
         now = datetime.utcnow()
 
+        # Get UPI settings
+        upi_settings = (
+            _memory["settings"]["upi"]
+            if _use_memory
+            else settings_collection.find_one({"_id": "upi"}) or {}
+        )
+        upi_id = upi_settings.get("upi_id", "raghukatti9912-1@okhdfcbank")
+
         if _use_memory:
             last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
             next_number = last_number + 1
@@ -293,13 +315,14 @@ def create_bill():
             bill = {
                 "_id": new_id,
                 "bill_number": next_number,
-                "bill_no_str": str(next_number).zfill(5),  # <-- padded string
+                "bill_no_str": str(next_number).zfill(5),
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
                 "total": total,
                 "created_at": iso(now),
-                "status": "unpaid"
+                "status": "unpaid",
+                "qr_code": generate_upi_qr(upi_id, total)
             }
             _memory["bills"][new_id] = bill
             _memory["customers"][customer_id].setdefault("bills", []).append(bill)
@@ -311,13 +334,14 @@ def create_bill():
             next_number = get_next_bill_number()
             bill_doc = {
                 "bill_number": next_number,
-                "bill_no_str": str(next_number).zfill(5),  # <-- padded string
+                "bill_no_str": str(next_number).zfill(5),
                 "customer_id": customer_id,
                 "items": items,
                 "subtotal": total,
                 "total": total,
                 "created_at": now,
-                "status": "unpaid"
+                "status": "unpaid",
+                "qr_code": generate_upi_qr(upi_id, total)
             }
             res = bills_collection.insert_one(bill_doc)
             bill_doc["_id"] = str(res.inserted_id)
