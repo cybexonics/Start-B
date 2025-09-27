@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-app.py - Flask API for Star-B with MongoDB + sequential bills + memory fallback
+app.py - Flask API for Start-B with MongoDB + sequential bills + fixed settings routes
 """
 
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
-from pymongo import MongoClient, ReturnDocument
+from pymongo import MongoClient
 from bson import ObjectId
 from datetime import datetime
 from dotenv import load_dotenv
@@ -14,14 +14,15 @@ import threading
 import uuid
 import logging
 import traceback
-import certifi  # SSL CA file for MongoDB Atlas
+import certifi  # for SSL CA file
 
 # ----------------------------
 # Setup
 # ----------------------------
 load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("star-b-api")
+logger = logging.getLogger("start-b-api")
 
 app = Flask(__name__)
 
@@ -31,7 +32,7 @@ app = Flask(__name__)
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://star-frontend-chi.vercel.app"
+    "https://star-frontend-chi.vercel.app",
 ]
 
 CORS(
@@ -51,8 +52,12 @@ def _handle_options_preflight():
         origin = request.headers.get("Origin")
         if origin and origin in ALLOWED_ORIGINS:
             resp.headers["Access-Control-Allow-Origin"] = origin
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+            resp.headers[
+                "Access-Control-Allow-Headers"
+            ] = "Content-Type, Authorization, X-Requested-With, Accept"
+            resp.headers[
+                "Access-Control-Allow-Methods"
+            ] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
             resp.headers["Access-Control-Allow-Credentials"] = "true"
         return resp
 
@@ -62,14 +67,18 @@ def add_cors_headers(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers[
+            "Access-Control-Allow-Headers"
+        ] = "Content-Type, Authorization, X-Requested-With, Accept"
+        response.headers[
+            "Access-Control-Allow-Methods"
+        ] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
 
 # ----------------------------
-# Database Setup
+# Database
 # ----------------------------
 MONGO_URI = os.getenv("MONGO_URI", "").strip() or None
 DB_NAME = os.getenv("MONGO_DB_NAME", "start_billing")
@@ -92,11 +101,8 @@ def make_in_memory_store():
                 "address": "Demo Street 1",
                 "phone": "0000000000",
             },
-            "upi": {
-                "upi_id": "demo@upi",
-                "qr_code_url": ""
-            }
-        }
+            "upi": {"upi_id": "demo@upi", "qr_code_url": ""},
+        },
     }
 
 
@@ -108,21 +114,21 @@ if MONGO_URI:
             MONGO_URI,
             serverSelectionTimeoutMS=5000,
             tls=True,
-            tlsCAFile=certifi.where()
+            tlsCAFile=certifi.where(),
         )
         client.admin.command("ping")
         db = client.get_database(DB_NAME)
         customers_collection = db["customers"]
         bills_collection = db["bills"]
         settings_collection = db["settings"]
-        logger.info("✅ MongoDB connected")
+        logger.info("✅ MongoDB connected (MONGO_URI provided)")
     except Exception as e:
         logger.error("❌ MongoDB connection failed: %s", e)
         logger.error(traceback.format_exc())
         _use_memory = True
         _memory = make_in_memory_store()
 else:
-    logger.info("ℹ️ No MONGO_URI provided — using in-memory store")
+    logger.info("ℹ️ No MONGO_URI provided — using in-memory fallback")
     _use_memory = True
     _memory = make_in_memory_store()
 
@@ -163,20 +169,17 @@ def log_and_500(e):
 
 
 # ----------------------------
-# Bill Number Generator
+# Atomic sequential bill number
 # ----------------------------
 def get_next_bill_number():
-    try:
-        counter = db["counters"]
-        result = counter.find_one_and_update(
-            {"_id": "bill_number"},
-            {"$inc": {"seq": 1}},
-            upsert=True,
-            return_document=ReturnDocument.AFTER
-        )
-        return result["seq"]
-    except Exception:
-        return 1
+    counter = db["counters"]
+    result = counter.find_one_and_update(
+        {"_id": "bill_number"},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    return result["seq"]
 
 
 # ----------------------------
@@ -193,7 +196,7 @@ def get_business_settings():
         if _use_memory:
             return jsonify(_memory["settings"]["business"])
         doc = settings_collection.find_one({"_id": "business"}) or {}
-        return jsonify(serialize_doc(doc))
+        return jsonify(doc)
     except Exception as e:
         return log_and_500(e)
 
@@ -204,7 +207,7 @@ def get_upi_settings():
         if _use_memory:
             return jsonify(_memory["settings"]["upi"])
         doc = settings_collection.find_one({"_id": "upi"}) or {}
-        return jsonify(serialize_doc(doc))
+        return jsonify(doc)
     except Exception as e:
         return log_and_500(e)
 
@@ -225,6 +228,7 @@ def create_customer():
             return jsonify({"error": "Name and phone are required"}), 400
 
         now = datetime.utcnow()
+
         if _use_memory:
             new_id = gen_id()
             customer = {
@@ -239,7 +243,7 @@ def create_customer():
                 "total_orders": 0,
                 "total_spent": 0,
                 "outstanding_balance": 0,
-                "bills": []
+                "bills": [],
             }
             _memory["customers"][new_id] = customer
             return jsonify({"message": "Customer created", "customer": customer}), 201
@@ -255,7 +259,7 @@ def create_customer():
             "total_orders": 0,
             "total_spent": 0,
             "outstanding_balance": 0,
-            "bills": []
+            "bills": [],
         }
         result = customers_collection.insert_one(payload)
         payload["_id"] = str(result.inserted_id)
@@ -282,7 +286,7 @@ def list_customers():
                 query = {
                     "$or": [
                         {"name": {"$regex": search, "$options": "i"}},
-                        {"phone": {"$regex": search}}
+                        {"phone": {"$regex": search}},
                     ]
                 }
             cursor = customers_collection.find(query).sort("created_at", -1)
@@ -314,9 +318,11 @@ def create_bill():
         now = datetime.utcnow()
 
         if _use_memory:
-            last_number = max([b.get("bill_number", 0) for b in _memory["bills"].values()], default=0)
+            last_number = max(
+                [b.get("bill_number", 0) for b in _memory["bills"].values()],
+                default=0,
+            )
             next_number = last_number + 1
-
             if customer_id not in _memory["customers"]:
                 return jsonify({"error": "Customer not found"}), 404
 
@@ -330,7 +336,7 @@ def create_bill():
                 "subtotal": total,
                 "total": total,
                 "created_at": iso(now),
-                "status": "unpaid"
+                "status": "unpaid",
             }
             _memory["bills"][new_id] = bill
             _memory["customers"][customer_id].setdefault("bills", []).append(bill)
@@ -349,7 +355,7 @@ def create_bill():
             "subtotal": total,
             "total": total,
             "created_at": now,
-            "status": "unpaid"
+            "status": "unpaid",
         }
         res = bills_collection.insert_one(bill_doc)
         bill_doc["_id"] = str(res.inserted_id)
@@ -357,7 +363,7 @@ def create_bill():
 
         customers_collection.update_one(
             {"_id": ObjectId(customer_id)},
-            {"$inc": {"total_orders": 1, "total_spent": total}}
+            {"$inc": {"total_orders": 1, "total_spent": total}},
         )
         return jsonify({"message": "Bill created", "bill": bill_doc}), 201
     except Exception as e:
@@ -380,24 +386,34 @@ def list_bills():
 
 
 # ----------------------------
-# Admin Dashboard APIs
+# Admin Dashboard Placeholder APIs
 # ----------------------------
 @app.route("/api/tailors", methods=["GET"])
 def list_tailors():
-    return jsonify({"tailors": []})
+    try:
+        return jsonify({"tailors": []})
+    except Exception as e:
+        return log_and_500(e)
 
 
 @app.route("/api/jobs", methods=["GET"])
 def list_jobs():
-    return jsonify({"jobs": []})
+    try:
+        return jsonify({"jobs": []})
+    except Exception as e:
+        return log_and_500(e)
 
 
 @app.route("/api/dashboard/stats", methods=["GET"])
 def dashboard_stats():
     try:
         stats = {
-            "total_customers": len(_memory["customers"]) if _use_memory else customers_collection.count_documents({}),
-            "total_bills": len(_memory["bills"]) if _use_memory else bills_collection.count_documents({}),
+            "total_customers": len(_memory["customers"])
+            if _use_memory
+            else customers_collection.count_documents({}),
+            "total_bills": len(_memory["bills"])
+            if _use_memory
+            else bills_collection.count_documents({}),
             "total_revenue": (
                 sum([b.get("total", 0) for b in _memory["bills"].values()])
                 if _use_memory
@@ -410,7 +426,7 @@ def dashboard_stats():
 
 
 # ----------------------------
-# Background Task
+# Background task
 # ----------------------------
 def background_task():
     while True:
@@ -424,7 +440,11 @@ def background_task():
 # Run
 # ----------------------------
 if __name__ == "__main__":
-    logger.info("Starting app (port %s) - memory fallback=%s", os.getenv("PORT", 5000), _use_memory)
+    logger.info(
+        "Starting app (port %s) - memory fallback=%s",
+        os.getenv("PORT", 5000),
+        _use_memory,
+    )
     try:
         t = threading.Thread(target=background_task, daemon=True)
         t.start()
