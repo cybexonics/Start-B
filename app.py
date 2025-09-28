@@ -32,7 +32,8 @@ app = Flask(__name__)
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://star-frontend-chi.vercel.app"
+    "https://star-frontend-chi.vercel.app",
+    "https://star-f.vercel.app"   # ✅ added your live frontend
 ]
 
 CORS(
@@ -51,6 +52,8 @@ def _handle_options_preflight():
         origin = request.headers.get("Origin")
         if origin and origin in ALLOWED_ORIGINS:
             resp.headers["Access-Control-Allow-Origin"] = origin
+        else:
+            resp.headers["Access-Control-Allow-Origin"] = "*"   # ✅ fallback
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
         resp.headers["Access-Control-Allow-Credentials"] = "true"
@@ -61,6 +64,8 @@ def add_cors_headers(response):
     origin = request.headers.get("Origin")
     if origin and origin in ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        response.headers["Access-Control-Allow-Origin"] = "*"   # ✅ fallback
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
     response.headers["Access-Control-Allow-Credentials"] = "true"
